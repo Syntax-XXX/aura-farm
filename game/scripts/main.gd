@@ -5,7 +5,7 @@ const Smoke := preload("res://scripts/smoke.gd")
 const Net := preload("res://scripts/net.gd")
 const Sfx := preload("res://scripts/sfx.gd")
 
-const VERSION := "1.0.1"
+const VERSION := "1.0.2"
 const SAVE_PATH := "user://save.json"
 ## Standard: eigener Server über Tailscale (die Verbindung ist durch WireGuard verschlüsselt).
 ## Für öffentlich gehostete Server im Menü eine wss://…/ws-Adresse eintragen.

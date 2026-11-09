@@ -1,16 +1,18 @@
 {
   "name": "aura-farm-server",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Multiplayer-Server für Aura Farm (WebSocket + Statusseite)",
   "main": "server.js",
   "license": "MIT",
   "private": true,
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/server.test.js"
   },
   "dependencies": {
-    "ws": "8.18.0"
+    "ws": "8.22.2"
   }
 }
