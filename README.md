@@ -7,6 +7,12 @@ Mit **Multiplayer**: Mitspieler, ihre Tricks und eine gemeinsame Bestenliste.
 
 > Nur ein Spiel. Echtes Dampfen ist nicht gesund.
 
+![Park](docs/screenshots/02-park.png)
+
+| Menü | Vape-Shop |
+| --- | --- |
+| ![Menü](docs/screenshots/01-menu.png) | ![Shop](docs/screenshots/05-shop.png) |
+
 | Plattform | Datei | Installation |
 | --- | --- | --- |
 | **Windows** | `AuraFarm-…-windows-x86_64.zip` | entpacken, `AuraFarm.exe` starten |

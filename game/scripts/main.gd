@@ -5,8 +5,10 @@ const Smoke := preload("res://scripts/smoke.gd")
 const Net := preload("res://scripts/net.gd")
 const Sfx := preload("res://scripts/sfx.gd")
 
-const VERSION := "1.0.0"
+const VERSION := "1.0.1"
 const SAVE_PATH := "user://save.json"
+## Standard: eigener Server über Tailscale (die Verbindung ist durch WireGuard verschlüsselt).
+## Für öffentlich gehostete Server im Menü eine wss://…/ws-Adresse eintragen.
 const DEFAULT_SERVER := "ws://100.126.128.24/auraserver/ws"
 const U := "↑"
 const D := "↓"
@@ -100,6 +102,7 @@ var board_top: Array = []
 var send_t := 0.0
 var selftest := false
 var test_server := ""
+var shot_path := ""
 var ui := {}
 var chat_open := false
 # Touch-Steuerung (Handy/Tablet)
@@ -119,6 +122,8 @@ func _ready() -> void:
 			selftest = true
 		elif a.begins_with("--server="):
 			test_server = a.substr(9)
+		elif a.begins_with("--shot="):
+			shot_path = a.substr(7)
 	_load()
 	_build_env()
 	_build_world()
@@ -143,6 +148,8 @@ func _ready() -> void:
 	render_hud()
 	if selftest:
 		_run_selftest()
+	elif shot_path != "":
+		_run_shots()
 	else:
 		show_menu(true)
 
@@ -226,9 +233,11 @@ func _build_env() -> void:
 	env = Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.9
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.62, 0.68, 0.8)
+	env.ambient_light_energy = 0.5
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.tonemap_exposure = 0.95
 	env.fog_enabled = true
 	env.fog_light_color = Color("bcd7f0")
 	env.fog_density = 0.006
@@ -237,7 +246,7 @@ func _build_env() -> void:
 	we.environment = env
 	add_child(we)
 	sun = DirectionalLight3D.new()
-	sun.light_energy = 1.4
+	sun.light_energy = 0.85
 	sun.light_color = Color("fff1d6")
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 90.0
@@ -275,7 +284,7 @@ func ring_mesh(r1: float, r2: float, segs: int) -> ArrayMesh:
 		var p01 := Vector3(cos(a0) * r2, 0, sin(a0) * r2)
 		var p10 := Vector3(cos(a1) * r1, 0, sin(a1) * r1)
 		var p11 := Vector3(cos(a1) * r2, 0, sin(a1) * r2)
-		for v in [p00, p11, p01, p00, p10, p11]:
+		for v in [p00, p01, p11, p00, p11, p10]:
 			st.set_normal(Vector3.UP)
 			st.add_vertex(v)
 	return st.commit()
@@ -754,37 +763,23 @@ func _build_ui() -> void:
 	vspace.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(vspace)
 
-	# untere Zeile: Chat links, Ladebalken Mitte
-	var bottom := HBoxContainer.new()
-	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(bottom)
-	var chatc := VBoxContainer.new()
-	chatc.custom_minimum_size = Vector2(420, 0)
-	chatc.alignment = BoxContainer.ALIGNMENT_END
-	chatc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bottom.add_child(chatc)
-	ui.chatlog = VBoxContainer.new()
-	ui.chatlog.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chatc.add_child(ui.chatlog)
-	ui.chatin = LineEdit.new()
-	ui.chatin.placeholder_text = "Nachricht … (Enter senden, Esc abbrechen)"
-	ui.chatin.max_length = 120
-	ui.chatin.visible = false
-	ui.chatin.text_submitted.connect(_send_chat)
-	chatc.add_child(ui.chatin)
-	var sp1 := Control.new()
-	sp1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sp1.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bottom.add_child(sp1)
+	# unten Mitte: Kombo + Ladebalken + Hinweis (feste Anker, damit nichts aus dem Bild schiebt)
 	var mid := VBoxContainer.new()
-	mid.custom_minimum_size = Vector2(520, 0)
+	mid.anchor_left = 0.5
+	mid.anchor_right = 0.5
+	mid.anchor_top = 1.0
+	mid.anchor_bottom = 1.0
+	mid.offset_left = -240
+	mid.offset_right = 240
+	mid.offset_top = -120
+	mid.offset_bottom = -18
 	mid.alignment = BoxContainer.ALIGNMENT_END
 	mid.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bottom.add_child(mid)
+	root.add_child(mid)
 	ui.combo = lbl("", 30, Color("bef264"), mid)
 	ui.combo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ui.bar = ProgressBar.new()
-	ui.bar.custom_minimum_size = Vector2(520, 18)
+	ui.bar.custom_minimum_size = Vector2(0, 18)
 	ui.bar.show_percentage = false
 	var fill := StyleBoxFlat.new()
 	fill.bg_color = Color("c084fc")
@@ -798,14 +793,27 @@ func _build_ui() -> void:
 	mid.add_child(ui.bar)
 	ui.hint = lbl("F halten zum Ziehen", 13, Color(1, 1, 1, 0.8), mid)
 	ui.hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var sp2 := Control.new()
-	sp2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sp2.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bottom.add_child(sp2)
-	var balance := Control.new()
-	balance.custom_minimum_size = Vector2(420, 0)
-	balance.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bottom.add_child(balance)
+
+	# unten links: Chat
+	var chatc := VBoxContainer.new()
+	chatc.anchor_top = 1.0
+	chatc.anchor_bottom = 1.0
+	chatc.offset_left = 16
+	chatc.offset_right = 380
+	chatc.offset_top = -230
+	chatc.offset_bottom = -16
+	chatc.alignment = BoxContainer.ALIGNMENT_END
+	chatc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(chatc)
+	ui.chatlog = VBoxContainer.new()
+	ui.chatlog.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chatc.add_child(ui.chatlog)
+	ui.chatin = LineEdit.new()
+	ui.chatin.placeholder_text = "Nachricht … (Enter senden, Esc abbrechen)"
+	ui.chatin.max_length = 120
+	ui.chatin.visible = false
+	ui.chatin.text_submitted.connect(_send_chat)
+	chatc.add_child(ui.chatin)
 
 	# Fadenkreuz
 	var cc := CenterContainer.new()
@@ -1526,79 +1534,122 @@ func _on_net_closed(reason: String) -> void:
 		print("SELFTEST NETZ: Verbindung beendet: ", reason)
 
 
+## Eingehende Werte immer prüfen – Nachrichten vom Server gelten als nicht vertrauenswürdig.
+func _vec3(v, fallback := Vector3.ZERO) -> Vector3:
+	if v is Array and v.size() == 3 and (v[0] is float or v[0] is int) and (v[1] is float or v[1] is int) and (v[2] is float or v[2] is int):
+		return Vector3(clampf(v[0], -500, 500), clampf(v[1], -50, 500), clampf(v[2], -500, 500))
+	return fallback
+
+
+func _num(v, fallback := 0.0) -> float:
+	return float(v) if (v is float or v is int) and is_finite(float(v)) else fallback
+
+
+func _txt(v, maxlen := 32) -> String:
+	return str(v).substr(0, maxlen) if v is String else ""
+
+
 func _on_net_message(m: Dictionary) -> void:
 	match str(m.get("t", "")):
 		"welcome":
 			online = true
-			my_id = int(m["id"])
-			my_name = str(m["name"])
-			board_top = m.get("board", [])
-			for p in m.get("players", []):
-				_add_remote(p)
+			my_id = int(_num(m.get("id"), -1))
+			my_name = _txt(m.get("name"), 16) if _txt(m.get("name"), 16) != "" else my_name
+			board_top = _clean_board(m.get("board", []))
+			var plist = m.get("players", [])
+			if plist is Array:
+				for p in plist:
+					if p is Dictionary:
+						_add_remote(p)
 			ui.net.text = "Online als %s · %d Spieler" % [my_name, remotes.size() + 1]
 			if not selftest:
 				_enter_game()
 				pop("Online!", "%d andere Spieler im Park" % remotes.size(), Color("67e8f9"))
 		"join":
 			_add_remote(m)
-			chat_line("%s ist beigetreten" % m["name"], Color("67e8f9"))
+			chat_line("%s ist beigetreten" % _txt(m.get("name"), 16), Color("67e8f9"))
 		"leave":
-			var id := int(m["id"])
+			var id := int(_num(m.get("id"), -1))
 			if remotes.has(id):
 				chat_line("%s ist gegangen" % remotes[id]["name"], Color(1, 1, 1, 0.6))
 				remotes[id]["node"].queue_free()
 				remotes.erase(id)
 		"states":
-			for p in m.get("list", []):
-				var id := int(p["id"])
-				if id == my_id:
+			var slist = m.get("list", [])
+			if not slist is Array:
+				return
+			for p in slist:
+				if not p is Dictionary:
+					continue
+				var id := int(_num(p.get("id"), -1))
+				if id < 0 or id == my_id:
 					continue
 				if not remotes.has(id):
 					_add_remote(p)
+					if not remotes.has(id):
+						continue
 				var rr: Dictionary = remotes[id]
-				rr["target"] = Vector3(p["p"][0], p["p"][1], p["p"][2])
-				rr["yaw"] = float(p["yaw"])
-				rr["aura"] = float(p["aura"])
-				rr["vape"] = int(p["vape"])
+				rr["target"] = _vec3(p.get("p"), rr["target"])
+				rr["yaw"] = _num(p.get("yaw"))
+				rr["aura"] = _num(p.get("aura"))
+				rr["vape"] = clampi(int(_num(p.get("vape"))), 0, VAPES.size() - 1)
 				rr["label"].text = "%s\n✦ %s" % [rr["name"], fmt(rr["aura"])]
 		"trick":
-			var id := int(m.get("from", -1))
-			if not remotes.has(id):
+			var id := int(_num(m.get("from"), -1))
+			var tid := _txt(m.get("id"), 16)
+			var known := tid == "plain"
+			for t in TRICKS:
+				if t["id"] == tid:
+					known = true
+			if not remotes.has(id) or not known:
 				return
 			var rr: Dictionary = remotes[id]
-			var pp: Array = m.get("p", [0, 0, 0])
-			var dd: Array = m.get("dir", [0, 0, -1])
 			var own_cloud: float = smoke.cloud
-			smoke.cloud = float(VAPES[clampi(int(m.get("vape", 0)), 0, VAPES.size() - 1)]["cloud"])
-			effect(str(m["id"]), float(m.get("st", 0.5)), Vector3(pp[0], pp[1], pp[2]), Vector3(dd[0], dd[1], dd[2]), false)
+			smoke.cloud = float(VAPES[clampi(int(_num(m.get("vape"))), 0, VAPES.size() - 1)]["cloud"])
+			var dirv := _vec3(m.get("dir"), Vector3(0, 0, -1))
+			if dirv.length() < 0.01:
+				dirv = Vector3(0, 0, -1)
+			effect(tid, clampf(_num(m.get("st"), 0.5), 0.0, 1.0), _vec3(m.get("p"), rr["node"].position), dirv, false)
 			smoke.cloud = own_cloud
-			if rr["node"].position.distance_to(ppos) < 20 and str(m["id"]) != "plain":
+			if rr["node"].position.distance_to(ppos) < 20 and tid != "plain":
 				say(rr, "Trick!", Color("facc15"))
 		"board":
-			board_top = m.get("top", [])
+			board_top = _clean_board(m.get("top", []))
 			if ui.board.visible:
 				render_board()
 		"chat":
-			chat_line("%s: %s" % [m["name"], m["msg"]], Color.WHITE)
+			var msg := _txt(m.get("msg"), 120)
+			if msg != "":
+				chat_line("%s: %s" % [_txt(m.get("name"), 16), msg], Color.WHITE)
 		"error":
-			ui.menu_status.text = str(m.get("msg", "Fehler"))
+			ui.menu_status.text = _txt(m.get("msg"), 120)
+
+
+func _clean_board(v) -> Array:
+	var out: Array = []
+	if v is Array:
+		for e in v:
+			if e is Dictionary and out.size() < 20:
+				out.append({"name": _txt(e.get("name"), 16), "aura": _num(e.get("aura"))})
+	return out
 
 
 func _add_remote(p: Dictionary) -> void:
-	var id := int(p["id"])
-	if id == my_id or remotes.has(id):
+	var id := int(_num(p.get("id"), -1))
+	if id < 0 or id == my_id or remotes.has(id):
 		return
 	var g := _human(Color(SHIRTS[id % SHIRTS.size()]), Color("e0ac69"), Color("2b1b0e"))
-	var pos := Vector3(p["p"][0], p["p"][1], p["p"][2])
+	var pos := _vec3(p.get("p"), Vector3(0, 0, 18))
 	g.position = pos
 	add_child(g)
-	var label := _label3d("%s\n✦ %s" % [p["name"], fmt(float(p.get("aura", 0)))], 2.35, 48)
+	var rname := _txt(p.get("name"), 16)
+	var label := _label3d("%s\n✦ %s" % [rname, fmt(_num(p.get("aura")))], 2.35, 48)
 	label.modulate = Color("c4b5fd")
 	g.add_child(label)
 	var bubble := _label3d("", 2.95, 56)
 	bubble.visible = false
 	g.add_child(bubble)
-	remotes[id] = {"node": g, "label": label, "bubble": bubble, "until": 0, "name": str(p["name"]), "aura": float(p.get("aura", 0)), "vape": int(p.get("vape", 0)), "target": pos, "yaw": float(p.get("yaw", 0))}
+	remotes[id] = {"node": g, "label": label, "bubble": bubble, "until": 0, "name": rname, "aura": _num(p.get("aura")), "vape": clampi(int(_num(p.get("vape"))), 0, VAPES.size() - 1), "target": pos, "yaw": _num(p.get("yaw"))}
 	ui.net.text = "Online als %s · %d Spieler" % [my_name, remotes.size() + 1]
 
 
@@ -1618,7 +1669,7 @@ func _net_trick(id: String, st: float, fwd: Vector3) -> void:
 func chat_line(text: String, col: Color) -> void:
 	var l := lbl(text, 15, col, ui.chatlog)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.custom_minimum_size = Vector2(420, 0)
+	l.custom_minimum_size = Vector2(360, 0)
 	while ui.chatlog.get_child_count() > 7:
 		ui.chatlog.get_child(0).queue_free()
 	var tw := create_tween()
@@ -1781,7 +1832,7 @@ func _process(dt: float) -> void:
 	env.fog_density = lerp(0.006, 0.22, smog * smog)
 	sky_mat.sky_top_color = Color("3b82f6").lerp(Color("f4f6f8"), smog * 0.95)
 	sky_mat.sky_horizon_color = Color("a5d8ff").lerp(Color("f4f6f8"), smog)
-	sun.light_energy = 1.4 * (1.0 - smog * 0.6)
+	sun.light_energy = 0.85 * (1.0 - smog * 0.6)
 
 	# Wolken
 	for c in clouds:
@@ -1815,6 +1866,54 @@ func _process(dt: float) -> void:
 		if send_t <= 0:
 			send_t = 0.1
 			net.send({"t": "state", "p": [ppos.x, ppos.y, ppos.z], "yaw": yaw, "vape": vape_i, "aura": round(aura), "farmed": round(farmed)})
+
+
+# ═══════════════════════════ Screenshots (README / Kontrolle) ═══════════════════════════
+func _snap(name: String) -> void:
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(shot_path.path_join(name))
+	print("Screenshot: ", name)
+
+
+func _wait_frames(n: int) -> void:
+	for i in n:
+		await get_tree().process_frame
+
+
+func _run_shots() -> void:
+	show_menu(true)
+	await _wait_frames(20)
+	await _snap("01-menu.png")
+	ui.menu_wrap.visible = false
+	ui.dim.visible = false
+	playing = true
+	await _wait_frames(10)
+	await _snap("02-park.png")
+	start_inhale()
+	push_key(U)
+	push_key(U)
+	push_key(U)
+	time_offset += 1700
+	await _wait_frames(4)
+	await _snap("03-ziehen.png")
+	release()
+	await _wait_frames(30)
+	await _snap("04-oringe.png")
+	time_offset += 1500
+	farmed = 2e7
+	equip(6)
+	open_shop()
+	await _wait_frames(6)
+	await _snap("05-shop.png")
+	close_shop()
+	start_inhale()
+	for k in [U, U, D, D, L, R, L, R]:
+		push_key(k)
+	time_offset += 4100
+	release()
+	await _wait_frames(90)
+	await _snap("06-stadtnebel.png")
+	get_tree().quit(0)
 
 
 # ═══════════════════════════ Selbsttest (CI) ═══════════════════════════

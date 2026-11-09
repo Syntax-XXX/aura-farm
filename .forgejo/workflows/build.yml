@@ -27,19 +27,31 @@ jobs:
       - name: Server-Tests (node --test)
         run: |
           cd server
-          npm ci --no-audit --no-fund
+          npm ci --no-fund
           npm test
+
+      - name: Sicherheits-Audit der Abhängigkeiten
+        run: cd server && npm audit --omit=dev --audit-level=high
 
       - name: Godot (headless) holen
         run: |
           command -v unzip >/dev/null || (apt-get update -qq && apt-get install -y -qq unzip >/dev/null)
-          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          unzip -q /tmp/godot.zip -d /tmp/godot
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          file="Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          cd /tmp
+          curl -fsSL -o "$file" "$base/$file"
+          curl -fsSL -o SHA512-SUMS.txt "$base/SHA512-SUMS.txt"
+          grep " $file\$" SHA512-SUMS.txt | sha512sum -c -   # Integrität prüfen
+          unzip -q "$file" -d /tmp/godot
           mv /tmp/godot/Godot_v*_linux.x86_64 /usr/local/bin/godot
 
       - name: Spiel verbindet sich mit echtem Server
         run: |
-          (cd server && PORT=18080 DATA_DIR=/tmp/aura-data node server.js > /tmp/server.log 2>&1 &)
+          cd server
+          PORT=18080 DATA_DIR=/tmp/aura-data node server.js > /tmp/server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          cd ..
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:18080/healthz >/dev/null && break; sleep 1; done
           cd game
           timeout 300 godot --headless --import >/dev/null 2>&1 || true
@@ -62,13 +74,11 @@ jobs:
       GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: android
     steps:
       - name: Code holen (git – das Godot-Image hat kein Node für actions/checkout)
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # öffentliches Repo: kein Token in der URL nötig (taucht so auch nie in Logs auf)
           git config --global --add safe.directory '*'
-          host="${GITHUB_SERVER_URL#*://}"
           git init -q .
-          git remote add origin "http://ci:${TOKEN}@${host%/}/${GITHUB_REPOSITORY}.git"
+          git remote add origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"
           git fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
           git log -1 --oneline

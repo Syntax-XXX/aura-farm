@@ -20,9 +20,15 @@ jobs:
       - name: Godot + Export-Vorlagen holen
         run: |
           set -e
-          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
-          unzip -q godot.zip
-          curl -fsSL -o tpl.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          ed="Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+          tp="Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          curl -fsSL -o "$ed" "$base/$ed"
+          curl -fsSL -o "$tp" "$base/$tp"
+          curl -fsSL -o SHA512-SUMS.txt "$base/SHA512-SUMS.txt"
+          grep -E " ($ed|$tp)\$" SHA512-SUMS.txt | shasum -a 512 -c -   # Integrität prüfen
+          unzip -q "$ed"
+          cp "$tp" tpl.tpz
           T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           mkdir -p "$T"
           unzip -q tpl.tpz -d tpl
