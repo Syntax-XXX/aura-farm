@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aura Farm Server</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>💨</text></svg>">
+<style>
+:root { --bg: #0d0716; --card: rgba(255,255,255,.06); --line: rgba(192,132,252,.25); --text: #f5f3ff; --muted: #a78bfa; --aura: #c084fc; --gold: #facc15; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #f5f3ff; --card: #ffffff; --line: #ddd6fe; --text: #1e1035; --muted: #6d28d9; --aura: #7c3aed; --gold: #b45309; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(800px 400px at 50% -10%, rgba(124,58,237,.35), transparent 60%), var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
+main { max-width: 900px; margin: 0 auto; padding: 24px 16px 40px; }
+h1 { margin: 0; font-size: clamp(32px, 7vw, 54px); background: linear-gradient(90deg, #67e8f9, #c084fc, #f472b6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.sub { color: var(--muted); margin: 4px 0 22px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.kpi, .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }
+.kpi b { display: block; font-size: 28px; color: var(--aura); font-variant-numeric: tabular-nums; }
+.kpi span { color: var(--muted); font-size: 13px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+h2 { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
+td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: var(--aura); font-weight: 700; }
+tr:first-child td:first-child::before { content: "👑 "; }
+.empty { color: var(--muted); }
+code { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+.how { margin-top: 18px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>💨 Aura Farm Server</h1>
+  <p class="sub" id="sub">lädt …</p>
+  <div class="kpis">
+    <div class="kpi"><b id="online">–</b><span>Spieler online</span></div>
+    <div class="kpi"><b id="top">–</b><span>Höchste Aura</span></div>
+    <div class="kpi"><b id="up">–</b><span>Laufzeit</span></div>
+  </div>
+  <div class="grid">
+    <div class="card"><h2>Gerade online</h2><table id="pl"></table></div>
+    <div class="card"><h2>Bestenliste</h2><table id="bd"></table></div>
+  </div>
+  <div class="card how">
+    <h2>Mitspielen</h2>
+    Spiel starten → <b>Online spielen</b> → als Server diese Adresse eintragen:<br>
+    <code id="wsurl"></code>
+  </div>
+</main>
+<script>
+const VAPES = ['Starter-Pod', 'Einweg-Puff', 'Pod Pro', 'Box-Mod 80 W', 'Dual-Coil 200 W', 'Nebelmaschine', 'Wolkenkratzer 9000'];
+const fmt = (n) => Math.round(n).toLocaleString('de-DE');
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const base = location.pathname.replace(/[^/]*$/, '');
+document.getElementById('wsurl').textContent = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${base}ws`;
+async function load() {
+  try {
+    const s = await (await fetch(base + 'api/status', { cache: 'no-store' })).json();
+    document.getElementById('sub').textContent = `Version ${s.version} · max. ${s.max} Spieler`;
+    document.getElementById('online').textContent = s.online;
+    document.getElementById('top').textContent = s.board[0] ? '✦ ' + fmt(s.board[0].aura) : '–';
+    const h = Math.floor(s.uptime_s / 3600), m = Math.floor((s.uptime_s % 3600) / 60);
+    document.getElementById('up').textContent = `${h} h ${m} min`;
+    const row = (x) => `<tr><td>${esc(x.name)} <small style="opacity:.6">${esc(VAPES[x.vape] || '')}</small></td><td>✦ ${fmt(x.aura)}</td></tr>`;
+    document.getElementById('pl').innerHTML = s.players.map(row).join('') || '<tr><td class="empty">Niemand online</td><td></td></tr>';
+    document.getElementById('bd').innerHTML = s.board.map(row).join('') || '<tr><td class="empty">Noch keine Einträge</td><td></td></tr>';
+  } catch { document.getElementById('sub').textContent = 'Server nicht erreichbar'; }
+}
+load(); setInterval(load, 3000);
+</script>
+</body>
+</html>

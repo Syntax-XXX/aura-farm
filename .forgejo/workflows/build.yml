@@ -1,0 +1,140 @@
+# Aura Farm – CI/CD
+#  · jeder Push:   Server-Tests, Multiplayer-Test (Spiel gegen echten Server), Selbsttest,
+#                  Builds für Windows, Linux, Web und Android → /builds/aura-farm/<datum>_<sha>/ + latest
+#  · Tag v*:       zusätzlich Forgejo-Release mit allen Dateien
+name: Aura Farm
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  server:
+    name: Server + Multiplayer-Test
+    runs-on: docker
+    container:
+      image: node:22-bookworm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Server-Tests (node --test)
+        run: |
+          cd server
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Godot (headless) holen
+        run: |
+          command -v unzip >/dev/null || (apt-get update -qq && apt-get install -y -qq unzip >/dev/null)
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          mv /tmp/godot/Godot_v*_linux.x86_64 /usr/local/bin/godot
+
+      - name: Spiel verbindet sich mit echtem Server
+        run: |
+          (cd server && PORT=18080 DATA_DIR=/tmp/aura-data node server.js > /tmp/server.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18080/healthz >/dev/null && break; sleep 1; done
+          cd game
+          timeout 300 godot --headless --import >/dev/null 2>&1 || true
+          timeout 180 godot --headless -- --selftest --server=ws://127.0.0.1:18080/ws 2>&1 | grep -vE "mesh_get_surface_count|Parameter \"m\" is null" | tee /tmp/selftest.log
+          grep -q "SELFTEST BESTANDEN" /tmp/selftest.log
+          grep -q "Server-Verbindung" /tmp/selftest.log
+          echo "Server-Status nach dem Test:"; curl -s http://127.0.0.1:18080/api/status; echo
+          cat /tmp/server.log
+
+  builds:
+    name: Builds (Windows · Linux · Web · Android · iOS-Projekt)
+    runs-on: docker
+    needs: server
+    container:
+      image: barichello/godot-ci:4.3
+    timeout-minutes: 45
+    env:
+      GODOT_ANDROID_KEYSTORE_RELEASE_PATH: /root/debug.keystore
+      GODOT_ANDROID_KEYSTORE_RELEASE_USER: androiddebugkey
+      GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: android
+    steps:
+      - name: Code holen (git – das Godot-Image hat kein Node für actions/checkout)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global --add safe.directory '*'
+          host="${GITHUB_SERVER_URL#*://}"
+          git init -q .
+          git remote add origin "http://ci:${TOKEN}@${host%/}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
+          git log -1 --oneline
+
+      - name: Import + Selbsttest
+        working-directory: game
+        run: |
+          timeout 300 godot --headless --import >/dev/null 2>&1 || true
+          timeout 180 godot --headless -- --selftest 2>&1 | grep -vE "mesh_get_surface_count|Parameter \"m\" is null" | tee /tmp/selftest.log
+          grep -q "SELFTEST BESTANDEN" /tmp/selftest.log
+
+      - name: Exportieren
+        working-directory: game
+        run: |
+          set -e
+          mkdir -p ../build/windows ../build/linux ../build/web ../build/android ../build/ios
+          for p in Windows Linux Web Android iOS; do
+            echo "::group::$p"
+            timeout 600 godot --headless --export-release "$p" 2>&1 | grep -vE "mesh_get_surface_count|Parameter \"m\" is null|savepack: step" || true
+            echo "::endgroup::"
+          done
+          test -s ../build/windows/AuraFarm.exe
+          test -s ../build/linux/AuraFarm.x86_64
+          test -s ../build/web/index.wasm
+          test -s ../build/android/AuraFarm.apk
+
+      - name: Pakete schnüren
+        run: |
+          set -e
+          VERSION="$(sed -n 's/^config\/version="\(.*\)"/\1/p' game/project.godot)"
+          REF="${GITHUB_REF_NAME:-dev}"
+          mkdir -p dist
+          (cd build/windows && zip -q -9 "../../dist/AuraFarm-${VERSION}-windows-x86_64.zip" AuraFarm.exe)
+          (cd build/linux && chmod +x AuraFarm.x86_64 && tar -czf "../../dist/AuraFarm-${VERSION}-linux-x86_64.tar.gz" AuraFarm.x86_64)
+          (cd build/web && zip -q -9 -r "../../dist/AuraFarm-${VERSION}-web.zip" .)
+          cp build/android/AuraFarm.apk "dist/AuraFarm-${VERSION}-android-arm64.apk"
+          (cd build && zip -q -9 -r "../dist/AuraFarm-${VERSION}-ios-xcode-projekt.zip" ios)
+          (cd dist && sha256sum * > SHA256SUMS)
+          ls -la dist
+
+      - name: Auf NAS ablegen
+        run: |
+          set -e
+          if [ ! -d /builds ]; then echo "/builds nicht gemountet – übersprungen"; exit 0; fi
+          case "$GITHUB_REF" in
+            refs/tags/*) stamp="$GITHUB_REF_NAME" ;;
+            *) stamp="$(date +%Y-%m-%d_%H-%M)_${GITHUB_SHA%"${GITHUB_SHA#???????}"}" ;;
+          esac
+          ziel="/builds/aura-farm/$stamp"
+          mkdir -p "$ziel"
+          cp dist/* "$ziel/"
+          ln -sfn "$stamp" /builds/aura-farm/latest
+          echo "Abgelegt in $ziel"
+
+      - name: Forgejo-Release (nur bei Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          api="${GITHUB_SERVER_URL%/}/api/v1/repos/${GITHUB_REPOSITORY}"
+          body=$(printf '{"tag_name":"%s","name":"Aura Farm %s","body":"Automatisch gebaut von Forgejo Actions.\\n\\n- Windows: zip entpacken, AuraFarm.exe starten\\n- Linux: tar.gz entpacken, ./AuraFarm.x86_64\\n- Android: APK installieren (unbekannte Quellen erlauben)\\n- Web: zip auf einen Webserver legen\\n- iPhone: siehe README (AltStore, Build per GitHub macOS-Runner)"}' "$GITHUB_REF_NAME" "$GITHUB_REF_NAME")
+          id=$(wget -qO- --header "Authorization: token $TOKEN" --header "Content-Type: application/json" --post-data "$body" "$api/releases" | sed -n 's/^{"id":\([0-9]*\).*/\1/p')
+          if [ -z "$id" ]; then echo "Release konnte nicht angelegt werden (Token-Rechte?)"; exit 1; fi
+          for f in dist/*; do
+            n=$(basename "$f")
+            echo "lade $n hoch"
+            wget -qO- --header "Authorization: token $TOKEN" --header "Content-Type: application/octet-stream" --post-file "$f" "$api/releases/$id/assets?name=$n" >/dev/null
+          done
